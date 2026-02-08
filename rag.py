@@ -12,7 +12,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 import logging
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, ClassVar
 from pathlib import Path
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 import hashlib
@@ -93,9 +93,12 @@ class RAGSystem(BaseModel):
     _cached_llm: Optional[ChatGoogleGenerativeAI] = PrivateAttr(default=None)
     _cached_chain: Optional[Runnable] = PrivateAttr(default=None)
 
+    # Base directory for all vector DBs (not a model field)
+    VECTOR_DBS_DIR: ClassVar[str] = "vector_dbs"
+
     @model_validator(mode='after')
     def _set_db_name_from_file_path(self):
-        """Automatically set db_name from file_path if not provided."""
+        """Automatically set db_name from file_path if not provided. Stored under vector_dbs/."""
         if self.db_name is None:
             if isinstance(self.file_path, (str, Path)):
                 file_paths = [self.file_path]
@@ -107,12 +110,12 @@ class RAGSystem(BaseModel):
                 file_path_obj = Path(self.file_path)
                 # Get the filename without extension
                 filename_without_ext = file_path_obj.stem
-                # Append "_db" to create the database name
-                self.db_name = f"{filename_without_ext}_db"
+                # Store under vector_dbs/
+                self.db_name = str(Path(self.VECTOR_DBS_DIR) / f"{filename_without_ext}_db")
             else:
                 paths_str = "|".join(sorted(str(Path(p).resolve()) for p in file_paths))
                 h = hashlib.md5(paths_str.encode()).hexdigest()[:12]
-                self.db_name = f"multi_files_{h}_db"
+                self.db_name = str(Path(self.VECTOR_DBS_DIR) / f"multi_files_{h}_db")
         return self
 
     def _load_data(self) -> list[Document]:
@@ -273,6 +276,8 @@ class RAGSystem(BaseModel):
             return self._cached_vectorstore
 
         try:
+            # Ensure vector_dbs directory exists before creating or loading
+            Path(self.db_name).parent.mkdir(parents=True, exist_ok=True)
             if os.path.exists(self.db_name):
                 vectorstore = Chroma(
                     persist_directory=self.db_name,

@@ -5,3 +5,5 @@ __pycache__/
 *.pyd
 .Python
 test_docs/
+uploaded_docs/
+vector_dbs/

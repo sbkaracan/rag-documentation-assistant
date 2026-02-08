@@ -1,8 +1,5 @@
-import os
 from pathlib import Path
-
 import streamlit as st
-
 from rag import RAGSystem
 
 
@@ -45,6 +42,7 @@ def build_rag_system(
 
     # Prompt template: user-controlled preamble + fixed context/question section
     prompt_template = f"""{preamble.strip()}
+Never answer questions that are not related to the content of the documents.
 
 Context:
 {{context}}
@@ -105,18 +103,31 @@ If the documents do not contain the answer, say that you cannot find it."""
     )
 
     st.markdown("---")
-    st.header("Ask Questions")
+    st.header("Chat")
 
-    question = st.text_area("Your question about the uploaded document(s):", height=100)
-    ask_button = st.button("Get Answer")
+    # Persist full conversation so previous Q&As stay visible
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-    if ask_button:
+    if st.button("Clear chat", type="secondary"):
+        st.session_state.messages = []
+        st.rerun()
+
+    # Show all previous messages (user + assistant) in chat style
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # New question input (chat style)
+    if prompt := st.chat_input("Ask about your documents..."):
         if not uploaded_files:
             st.error("Please upload at least one PDF before asking a question.")
-        elif not question.strip():
+        elif not prompt.strip():
             st.error("Please enter a question.")
         else:
-            with st.spinner("Building knowledge base and generating answer..."):
+            # Add user message to history so it stays visible with previous Q&As
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.spinner("Thinking..."):
                 rag = build_rag_system(
                     uploaded_files=uploaded_files,
                     chunk_size=chunk_size,
@@ -128,14 +139,12 @@ If the documents do not contain the answer, say that you cannot find it."""
                     preamble=preamble,
                 )
                 if rag is None:
-                    st.error("Failed to initialize RAG system. Please check logs and configuration.")
-                    return
-                answer = rag.ask(question.strip())
-            if answer is None:
-                st.error("Failed to generate an answer. Please check logs and configuration.")
-            else:
-                st.subheader("Answer")
-                st.write(answer)
+                    reply = "Failed to initialize RAG system. Please check logs and configuration."
+                else:
+                    reply = rag.ask(prompt.strip()) or "Failed to generate an answer."
+            # Add assistant reply so full conversation stays visible
+            st.session_state.messages.append({"role": "assistant", "content": reply})
+            st.rerun()
 
 
 if __name__ == "__main__":
