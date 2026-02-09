@@ -40,11 +40,14 @@ def build_rag_system(
             f.write(uploaded.getbuffer())
         file_paths.append(str(dest_path))
 
-    # Prompt template: user-controlled preamble + fixed context/question section
+    # Prompt template: user-controlled preamble + chat history + context/question
+    # {chat_history} lets the model understand follow-up questions
     prompt_template = f"""{preamble.strip()}
-Never answer questions that are not related to the content of the documents.
 
-Context:
+Previous conversation (if any):
+{{chat_history}}
+
+Context from documents:
 {{context}}
 
 Question:
@@ -127,6 +130,14 @@ If the documents do not contain the answer, say that you cannot find it."""
         else:
             # Add user message to history so it stays visible with previous Q&As
             st.session_state.messages.append({"role": "user", "content": prompt})
+            # Build chat history from previous turns so the model can answer follow-ups
+            previous = st.session_state.messages[:-1]
+            chat_history_lines = []
+            for m in previous:
+                role = "User" if m["role"] == "user" else "Assistant"
+                chat_history_lines.append(f"{role}: {m['content']}")
+            chat_history_str = "\n".join(chat_history_lines) if previous else ""
+
             with st.spinner("Thinking..."):
                 rag = build_rag_system(
                     uploaded_files=uploaded_files,
@@ -141,7 +152,10 @@ If the documents do not contain the answer, say that you cannot find it."""
                 if rag is None:
                     reply = "Failed to initialize RAG system. Please check logs and configuration."
                 else:
-                    reply = rag.ask(prompt.strip()) or "Failed to generate an answer."
+                    reply = (
+                        rag.ask(prompt.strip(), chat_history=chat_history_str)
+                        or "Failed to generate an answer."
+                    )
             # Add assistant reply so full conversation stays visible
             st.session_state.messages.append({"role": "assistant", "content": reply})
             st.rerun()

@@ -462,10 +462,13 @@ class RAGSystem(BaseModel):
             if retriever is None or prompt_template is None or llm is None:
                 return None
             chain = (
-            {"context": RunnableLambda(lambda x: x["question"]) | retriever | self.format_docs
-            , "question": RunnablePassthrough()} 
-            | prompt_template 
-            | llm 
+            {
+                "context": RunnableLambda(lambda x: x["question"]) | retriever | self.format_docs,
+                "question": RunnableLambda(lambda x: x["question"]),
+                "chat_history": RunnableLambda(lambda x: x.get("chat_history", "") or ""),
+            }
+            | prompt_template
+            | llm
             | StrOutputParser()
             )
             logger.info(f"Chain created")
@@ -475,13 +478,13 @@ class RAGSystem(BaseModel):
             logger.error(f"Error chain: {e}")
             return None
 
-    def ask(self, question: str) -> str:
+    def ask(self, question: str, chat_history: Optional[str] = None) -> str:
         """
         Process a user question and return an answer using the RAG system.
         
         This is the main public method that orchestrates the entire RAG pipeline
         to answer a user's question. It:
-        1. Takes a question string as input
+        1. Takes a question string and optional chat history as input
         2. Executes the RAG chain (retrieval + generation)
         3. Logs the question and answer
         4. Returns the generated answer
@@ -489,6 +492,9 @@ class RAGSystem(BaseModel):
         Args:
             question: The user's question to answer. Should be a clear, specific
                      question about the content in the loaded PDF document.
+            chat_history: Optional string of previous conversation turns (e.g.
+                         "User: ...\\nAssistant: ...") so the model can answer
+                         follow-up questions. Defaults to empty string.
         
         Returns:
             str: The generated answer based on the retrieved context from the
@@ -506,7 +512,8 @@ class RAGSystem(BaseModel):
             chain = self._chain()
             if chain is None:
                 return None
-            result = chain.invoke({"question": question})
+            history = (chat_history or "").strip()
+            result = chain.invoke({"question": question, "chat_history": history})
             logger.info("-" * 50)
             logger.info(f"Question: {question}")
             logger.info(f"Answer: {result}")
