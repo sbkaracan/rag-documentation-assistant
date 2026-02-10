@@ -12,8 +12,13 @@ This system was tested using the "A Short Guide to the EU" document (`a_short_gu
 - [Features](#features)
 - [Setup Instructions](#setup-instructions)
 - [Usage](#usage)
+- [Docker Usage](#docker-usage)
 - [RAG vs Standard LLM Comparison](#rag-vs-standard-llm-comparison)
 - [Future Updates](#future-updates)
+- [Project Structure](#project-structure)
+- [Contributing](#contributing)
+- [Acknowledgments](#acknowledgments)
+- [Contact](#contact)
 
 ---
 
@@ -46,19 +51,28 @@ This system was tested using the "A Short Guide to the EU" document (`a_short_gu
 ### Core Functionality
 
 - **PDF Document Processing**: Automatically loads and processes PDF files using PyPDFLoader
+- **Multi-Document Support**: Upload and query **multiple PDF documents at once**, with a single shared vector database
 - **Intelligent Text Chunking**: Uses RecursiveCharacterTextSplitter to split documents while preserving context
 - **Vector Embeddings**: Leverages Google's Gemini embedding model (`gemini-embedding-001`) for high-quality vector representations
-- **Persistent Vector Database**: ChromaDB stores embeddings on disk, allowing reuse across sessions without re-embedding
+- **Persistent Vector Database**: ChromaDB stores embeddings on disk (under `vector_dbs/`), allowing reuse across sessions without re-embedding
 - **Semantic Search**: Finds the most relevant document chunks using vector similarity search
 - **LLM Integration**: Uses Google's Gemini 2.5 Flash model for fast, accurate answer generation
 
+### Interactive Web UI
+
+- **Streamlit Interface** (`app.py`):
+  - Upload one or more PDF files
+  - Adjust RAG parameters (chunk size, overlap, top‑k, temperature, model names)
+  - Chat in a conversational UI with basic conversation memory
+  - Answers are grounded in the uploaded documents
+
 ### Advanced Features
 
-- **Automatic Database Naming**: Database name is automatically derived from the PDF filename (e.g., `hello.pdf` → `hello_db`)
+- **Automatic Database Naming**: Database name is automatically derived from the PDF filenames and stored under `vector_dbs/`
 - **Configurable Chunking**: Adjustable chunk size (100-10,000 characters) and overlap for optimal performance
 - **Caching System**: Implements comprehensive caching for documents, chunks, embeddings, vectorstore, retriever, and LLM chain to improve performance
 - **Type Safety**: Built with Pydantic for automatic validation and type checking
-- **Customizable Prompts**: Flexible prompt templates with `{context}` and `{question}` placeholders
+- **Customizable Prompts**: Flexible prompt templates with `{context}`, `{question}` and an optional `{chat_history}` placeholder
 - **Search Configuration**: Configurable search parameters (top-k retrieval, search type)
 - **Temperature Control**: Adjustable temperature parameter for controlling response randomness
 - **Comprehensive Logging**: Detailed logging system with configurable log levels
@@ -69,6 +83,7 @@ This system was tested using the "A Short Guide to the EU" document (`a_short_gu
 - **Lazy Loading**: Components are initialized only when needed
 - **Error Handling**: Robust error handling with informative error messages
 - **LangChain Integration**: Built on LangChain for modularity and extensibility
+- **Dockerized Deployment**: Production‑ready `Dockerfile` for building and running the Streamlit app in a container
 
 ---
 
@@ -113,7 +128,7 @@ Place your PDF file in the project directory. For example:
 - `document.pdf`
 - Any other PDF file you want to query
 
-### Step 5: Run the Test Script
+### Step 5: Run the Test Script (optional, CLI usage)
 
 ```bash
 python test.py
@@ -123,16 +138,43 @@ The first run will:
 - Load and process your PDF
 - Split it into chunks
 - Generate embeddings
-- Create a ChromaDB database
+- Create a ChromaDB database under `vector_dbs/`
 - Answer your questions
 
 Subsequent runs will reuse the existing database, making queries much faster!
+
+### Step 6: Run the Streamlit Web App
+
+```bash
+streamlit run app.py
+```
+
+Then open `http://localhost:8501` in your browser. From the UI you can:
+
+- Upload one or more PDF documents
+- Tune RAG parameters (chunk size, overlap, top‑k, temperature, models)
+- Chat with the assistant about your documents in a conversational interface
 
 ---
 
 ## Usage
 
-### Basic Usage
+### Streamlit Web UI (recommended)
+
+1. Make sure your `.env` contains a valid `GOOGLE_API_KEY`.
+2. Start the app:
+
+   ```bash
+   streamlit run app.py
+   ```
+
+3. In the browser:
+   - Upload one or more PDF files
+   - Adjust chunk size, overlap, top‑k, and temperature
+   - Optionally change the prompt preamble and model names
+   - Ask questions in the chat panel (follow‑up questions are supported via chat history)
+
+### Programmatic Usage (Python)
 
 ```python
 from rag import RAGSystem
@@ -175,9 +217,9 @@ answer = rag.ask("Your question here")
 
 | Parameter | Type | Default | Description |
 |-----------|------|----------|-------------|
-| `file_path` | str/Path | Required | Path to the PDF file |
-| `prompt_template` | str | Required | Template with `{context}` and `{question}` |
-| `db_name` | str | Auto-generated | Database directory name (auto: `filename_db`) |
+| `file_path` | str / Path / list | Required | Path to a PDF file or list of PDF files |
+| `prompt_template` | str | Required | Template with `{context}` and `{question}` (and optionally `{chat_history}`) |
+| `db_name` | str | Auto-generated | Database directory path (auto: `vector_dbs/<filename>_db` or `vector_dbs/multi_files_<hash>_db`) |
 | `chunk_size` | int | 1000 | Chunk size in characters (100-10000) |
 | `chunk_overlap` | int | 100 | Overlap between chunks (≥0) |
 | `model_embedding` | str | "gemini-embedding-001" | Embedding model name |
@@ -185,6 +227,33 @@ answer = rag.ask("Your question here")
 | `search_type` | str | "similarity" | Search type ("similarity", "mmr", etc.) |
 | `search_kwargs` | dict | `{"k": 3}` | Search parameters |
 | `temperature` | float | 0.0 | LLM temperature (0.0-1.0) |
+
+---
+
+## Docker Usage
+
+You can also run the app inside a Docker container.
+
+### Build the Image
+
+From the project root:
+
+```bash
+docker build -t rag-documentation-assistant .
+```
+
+### Run the Container
+
+Using your local `.env` file (recommended):
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -p 8501:8501 \
+  rag-documentation-assistant
+```
+
+This starts the same Streamlit UI at `http://localhost:8501`.
 
 ---
 
@@ -275,51 +344,42 @@ Between 2014 and 2020, the EU invested over €460 billion in its regions. Examp
 
 > **Note:** These are potential enhancements that may be worked on as time permits. Contributions from the community are welcome! If you're interested in implementing any of these features, please feel free to submit a Pull Request.
 
-1. **Multi-Document Support**
-   - Ability to process and query multiple PDF documents simultaneously
-   - Cross-document reference and comparison capabilities
-
-2. **Web Interface**
-   - Interactive web UI using Streamlit or Gradio
-   - Real-time question-answering interface
-   - Document upload and management
-
-3. **Advanced Retrieval Methods**
+1. **Advanced Retrieval Methods**
    - Hybrid search (combining keyword and semantic search)
    - Re-ranking of retrieved chunks
    - Query expansion and reformulation
 
-4. **Citation and Source Tracking**
+2. **Citation and Source Tracking**
    - Automatic citation of source chunks
    - Page number references
    - Confidence scores for answers
 
-5. **Multi-Model Support**
+3. **Multi-Model Support**
    - Support for OpenAI, Anthropic, and other LLM providers
    - Embedding model selection (OpenAI, Cohere, etc.)
    - Model comparison tools
 
-6. **Performance Optimizations**
+4. **Performance Optimizations**
    - Batch processing for multiple questions
    - Async/await support for concurrent queries
    - Streaming responses for real-time answers
 
-7. **Enhanced Chunking Strategies**
+5. **Enhanced Chunking Strategies**
    - Semantic chunking (chunk by topic/meaning)
    - Document structure-aware chunking (respect headers, sections)
    - Custom chunking strategies
 
-8. **Vector Database Options**
+6. **Vector Database Options**
    - Support for alternative vector databases (Pinecone, Weaviate, Qdrant, FAISS, etc.)
    - Easy switching between different vector database backends
    - Database-specific optimizations
 
-9. **Multiple Document Types**
+7. **Multiple Document Types**
    - Support for additional document formats (.txt, .html, .docx, .md, etc.)
    - Format-specific loaders and processors
    - Unified interface for different document types
 
-10. **API Endpoint**
+8. **API Endpoint**
     - RESTful API for integration with other applications
     - Webhook support
     - Rate limiting and authentication
@@ -331,15 +391,18 @@ Between 2014 and 2020, the EU invested over €460 billion in its regions. Examp
 ```
 rag-eu-documentation-assistant/
 │
+├── app.py                 # Streamlit web UI (multi-document chat interface)
 ├── rag.py                 # Main RAG system implementation
-├── test.py                # Example usage script
+├── test.py                # Example CLI usage script
+├── Dockerfile             # Docker image definition for the Streamlit app
 ├── requirements.txt       # Python dependencies
-├── README.md             # This file
-├── .env                   # Environment variables (create this)
-├── .gitignore            # Git ignore rules
+├── README.md              # This file
+├── .env.example           # Example environment variables (do NOT commit real .env)
+├── .gitignore             # Git ignore rules
 │
-└── [pdf_file]_db/        # ChromaDB database (auto-generated)
-    └── ...               # Vector database files
+├── uploaded_docs/         # Uploaded PDF files (created at runtime)
+└── vector_dbs/            # ChromaDB databases for single/multi-document runs
+    └── ...                # Vector database files
 ```
 
 ---
