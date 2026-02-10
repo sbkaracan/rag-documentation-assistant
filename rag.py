@@ -12,9 +12,10 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union, ClassVar
 from pathlib import Path
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
+import hashlib
 
 load_dotenv()
 logging.basicConfig(
@@ -72,7 +73,7 @@ class RAGSystem(BaseModel):
         >>> answer = rag.ask("What is the main topic?")
         >>> print(answer)
     """
-    file_path: str | Path
+    file_path: Union[str, Path, List[Union[str, Path]]]
     prompt_template: str
     db_name: str = None
     chunk_size: int = Field(default=1000, ge=100, le=10000)  # With constraints
@@ -92,16 +93,29 @@ class RAGSystem(BaseModel):
     _cached_llm: Optional[ChatGoogleGenerativeAI] = PrivateAttr(default=None)
     _cached_chain: Optional[Runnable] = PrivateAttr(default=None)
 
+    # Base directory for all vector DBs (not a model field)
+    VECTOR_DBS_DIR: ClassVar[str] = "vector_dbs"
+
     @model_validator(mode='after')
     def _set_db_name_from_file_path(self):
-        """Automatically set db_name from file_path if not provided."""
+        """Automatically set db_name from file_path if not provided. Stored under vector_dbs/."""
         if self.db_name is None:
-            # Convert file_path to Path object if it's a string
-            file_path_obj = Path(self.file_path)
-            # Get the filename without extension
-            filename_without_ext = file_path_obj.stem
-            # Append "_db" to create the database name
-            self.db_name = f"{filename_without_ext}_db"
+            if isinstance(self.file_path, (str, Path)):
+                file_paths = [self.file_path]
+            else:
+                file_paths = self.file_path
+
+            if len(file_paths) == 1:
+                # Convert file_path to Path object if it's a string
+                file_path_obj = Path(self.file_path)
+                # Get the filename without extension
+                filename_without_ext = file_path_obj.stem
+                # Store under vector_dbs/
+                self.db_name = str(Path(self.VECTOR_DBS_DIR) / f"{filename_without_ext}_db")
+            else:
+                paths_str = "|".join(sorted(str(Path(p).resolve()) for p in file_paths))
+                h = hashlib.md5(paths_str.encode()).hexdigest()[:12]
+                self.db_name = str(Path(self.VECTOR_DBS_DIR) / f"multi_files_{h}_db")
         return self
 
     def _load_data(self) -> list[Document]:
@@ -130,15 +144,27 @@ class RAGSystem(BaseModel):
             return self._cached_documents
 
         try:
-            if not os.path.exists(self.file_path):
-                raise FileNotFoundError(f"File not found: {self.file_path}")
-            
-            logger.info(f"Loading PDF file from {self.file_path}")
-            loader = PyPDFLoader(self.file_path)
-            #self.db_name = self.file_path.stem + "_chroma_db"
-            data = loader.load()
-            self._cached_documents = data
-            return data
+            if isinstance(self.file_path, (str, Path)):
+                file_paths = [self.file_path]
+            else:
+                file_paths = self.file_path
+
+            all_documents = []
+            for file_path in file_paths:
+                file_path_str = str(file_path)
+                if not os.path.exists(file_path_str):
+                    raise FileNotFoundError(f"File not found: {file_path_str}")
+                
+                logger.info(f"Loading PDF file from {file_path_str}")
+                loader = PyPDFLoader(file_path_str)
+                documents = loader.load()
+                for doc in documents:
+                    doc.metadata['source_file'] = file_path_str
+                all_documents.extend(documents)
+                logger.info(f"Loaded {len(documents)} pages from {file_path_str}")
+
+            self._cached_documents = all_documents
+            return all_documents
         except Exception as e:
             logger.error(f"Error loading data: {e}")
             return None
@@ -250,6 +276,8 @@ class RAGSystem(BaseModel):
             return self._cached_vectorstore
 
         try:
+            # Ensure vector_dbs directory exists before creating or loading
+            Path(self.db_name).parent.mkdir(parents=True, exist_ok=True)
             if os.path.exists(self.db_name):
                 vectorstore = Chroma(
                     persist_directory=self.db_name,
@@ -262,7 +290,7 @@ class RAGSystem(BaseModel):
                     return None
 
                 vectorstore = Chroma.from_documents(
-                documents=chunks, 
+                documents=chunks,
                 embedding=self._embed_data_google(),
                 persist_directory=self.db_name)
                 logger.info(f"Created new Chroma database in {self.db_name}")
@@ -434,10 +462,13 @@ class RAGSystem(BaseModel):
             if retriever is None or prompt_template is None or llm is None:
                 return None
             chain = (
-            {"context": RunnableLambda(lambda x: x["question"]) | retriever | self.format_docs
-            , "question": RunnablePassthrough()} 
-            | prompt_template 
-            | llm 
+            {
+                "context": RunnableLambda(lambda x: x["question"]) | retriever | self.format_docs,
+                "question": RunnableLambda(lambda x: x["question"]),
+                "chat_history": RunnableLambda(lambda x: x.get("chat_history", "") or ""),
+            }
+            | prompt_template
+            | llm
             | StrOutputParser()
             )
             logger.info(f"Chain created")
@@ -447,13 +478,13 @@ class RAGSystem(BaseModel):
             logger.error(f"Error chain: {e}")
             return None
 
-    def ask(self, question: str) -> str:
+    def ask(self, question: str, chat_history: Optional[str] = None) -> str:
         """
         Process a user question and return an answer using the RAG system.
         
         This is the main public method that orchestrates the entire RAG pipeline
         to answer a user's question. It:
-        1. Takes a question string as input
+        1. Takes a question string and optional chat history as input
         2. Executes the RAG chain (retrieval + generation)
         3. Logs the question and answer
         4. Returns the generated answer
@@ -461,6 +492,9 @@ class RAGSystem(BaseModel):
         Args:
             question: The user's question to answer. Should be a clear, specific
                      question about the content in the loaded PDF document.
+            chat_history: Optional string of previous conversation turns (e.g.
+                         "User: ...\\nAssistant: ...") so the model can answer
+                         follow-up questions. Defaults to empty string.
         
         Returns:
             str: The generated answer based on the retrieved context from the
@@ -478,7 +512,8 @@ class RAGSystem(BaseModel):
             chain = self._chain()
             if chain is None:
                 return None
-            result = chain.invoke({"question": question})
+            history = (chat_history or "").strip()
+            result = chain.invoke({"question": question, "chat_history": history})
             logger.info("-" * 50)
             logger.info(f"Question: {question}")
             logger.info(f"Answer: {result}")
